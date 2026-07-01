@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { ChatMessage } from "../api";
+import Markdown from "./Markdown";
 
 interface Props {
   messages: ChatMessage[];
@@ -23,7 +24,9 @@ export default function MessageList({ messages, loading }: Props) {
       {messages.map((m, i) => (
         <div key={i} className={`msg msg-${m.role}`}>
           <div className="msg-role">{m.role === "user" ? "You" : "Assistant"}</div>
-          <div className="msg-content">{m.content}</div>
+          <div className="msg-content">
+            {m.role === "assistant" ? <Markdown content={m.content} /> : m.content}
+          </div>
         </div>
       ))}
       {loading && (

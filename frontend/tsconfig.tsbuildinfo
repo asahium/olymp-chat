@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/chatpage.tsx","./src/loginpage.tsx","./src/api.ts","./src/main.tsx","./src/components/messageinput.tsx","./src/components/messagelist.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/chatpage.tsx","./src/loginpage.tsx","./src/api.ts","./src/clipboard.ts","./src/main.tsx","./src/components/codeblock.tsx","./src/components/markdown.tsx","./src/components/messageinput.tsx","./src/components/messagelist.tsx"],"version":"5.9.3"}
