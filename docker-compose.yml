@@ -1,0 +1,39 @@
+# Single-service deployment: the backend builds and serves the frontend.
+# Redis / Postgres are intentionally omitted for the MVP (SQLite + in-memory
+# rate limits). See the commented blocks below for when you outgrow one worker.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # Persist the SQLite DB (participants + chat logs) across restarts.
+      - ./data:/app/data
+    restart: unless-stopped
+
+# --- Enable these only when scaling beyond a single backend worker ---
+#
+#  redis:
+#    image: redis:7-alpine
+#    restart: unless-stopped
+#    # Then set REDIS_URL=redis://redis:6379/0 in .env and move the rate limiter
+#    # in app/rate_limit.py to a Redis-backed implementation.
+#
+#  postgres:
+#    image: postgres:16-alpine
+#    environment:
+#      POSTGRES_USER: aioi
+#      POSTGRES_PASSWORD: change-me
+#      POSTGRES_DB: aioi
+#    volumes:
+#      - pgdata:/var/lib/postgresql/data
+#    restart: unless-stopped
+#    # Then set DATABASE_URL=postgresql://... and swap app/database.py accordingly.
+#
+# volumes:
+#   pgdata:
