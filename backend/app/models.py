@@ -51,6 +51,20 @@ class ChatResponse(BaseModel):
     limits: ChatLimits
 
 
+class ChangeCodeRequest(BaseModel):
+    new_code: str
+
+
+class SavedChat(BaseModel):
+    id: str
+    messages: list[ClientMessage] = Field(default_factory=list)
+    updated_at: int = 0
+
+
+class SaveChatsRequest(BaseModel):
+    chats: list[SavedChat] = Field(default_factory=list)
+
+
 class MeResponse(BaseModel):
     participant_id: str
     display_name: str

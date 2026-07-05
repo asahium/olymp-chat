@@ -4,6 +4,7 @@ Plain stdlib ``sqlite3`` to stay dependency-light. A new connection is opened
 per operation, which is more than fast enough for a single-worker camp
 deployment. The DB file lives in a mounted volume (see docker-compose).
 """
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -52,7 +53,8 @@ def init_db() -> None:
                 login_code     TEXT NOT NULL UNIQUE,
                 is_active      INTEGER NOT NULL DEFAULT 1,
                 created_at     TEXT NOT NULL,
-                reset_at       TEXT
+                reset_at       TEXT,
+                code_changed   INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS chat_logs (
@@ -80,11 +82,61 @@ def init_db() -> None:
                 key   TEXT PRIMARY KEY,
                 value TEXT
             );
+
+            -- Server-side saved chats so a participant sees recent chats from
+            -- any device after login. Kept to the last few per participant.
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                participant_id TEXT NOT NULL,
+                chat_id        TEXT NOT NULL,
+                messages_json  TEXT NOT NULL,
+                updated_at     INTEGER NOT NULL,
+                PRIMARY KEY (participant_id, chat_id)
+            );
             """
         )
+        # Migration for pre-existing databases: add code_changed if missing.
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(participants)")]
+        if "code_changed" not in cols:
+            conn.execute(
+                "ALTER TABLE participants ADD COLUMN code_changed INTEGER NOT NULL DEFAULT 0"
+            )
 
 
 # --- key/value ---------------------------------------------------------------
+
+MAX_SAVED_CHATS = 2
+
+
+def get_saved_chats(participant_id: str) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT chat_id, messages_json, updated_at FROM chat_sessions "
+            "WHERE participant_id = ? ORDER BY updated_at DESC LIMIT ?",
+            (participant_id, MAX_SAVED_CHATS),
+        ).fetchall()
+    out = []
+    for r in rows:
+        try:
+            messages = json.loads(r["messages_json"])
+        except ValueError:
+            messages = []
+        out.append({"id": r["chat_id"], "messages": messages, "updated_at": r["updated_at"]})
+    return out
+
+
+def save_saved_chats(participant_id: str, chats: list[dict]) -> None:
+    """Replace a participant's saved chats with the given list (newest kept)."""
+    ordered = sorted(chats, key=lambda c: c.get("updated_at", 0), reverse=True)[:MAX_SAVED_CHATS]
+    with _connect() as conn:
+        conn.execute("DELETE FROM chat_sessions WHERE participant_id = ?", (participant_id,))
+        for c in ordered:
+            conn.execute(
+                "INSERT INTO chat_sessions (participant_id, chat_id, messages_json, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                (participant_id, c["id"], json.dumps(c["messages"], ensure_ascii=False),
+                 int(c.get("updated_at", 0))),
+            )
+
 
 def get_kv(key: str) -> Optional[str]:
     with _connect() as conn:
@@ -151,6 +203,33 @@ def reset_quota(participant_id: str) -> bool:
         return cur.rowcount > 0
 
 
+def set_login_code(participant_id: str, code: str) -> bool:
+    """Set a participant's login code and mark that they changed it themselves."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE participants SET login_code = ?, code_changed = 1 "
+            "WHERE participant_id = ?",
+            (code, participant_id),
+        )
+        return cur.rowcount > 0
+
+
+def set_display_name(participant_id: str, name: str) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE participants SET display_name = ? WHERE participant_id = ?",
+            (name, participant_id),
+        )
+        return cur.rowcount > 0
+
+
+def reset_all_quotas() -> int:
+    """Reset the contest quota window for every participant."""
+    with _connect() as conn:
+        cur = conn.execute("UPDATE participants SET reset_at = ?", (utcnow_iso(),))
+        return cur.rowcount
+
+
 def list_participants() -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
@@ -188,6 +267,15 @@ def insert_log(row: dict) -> None:
         )
 
 
+def delete_logs_for(participant_id: str) -> int:
+    """Permanently remove all chat logs for a participant (clears their stats)."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM chat_logs WHERE participant_id = ?", (participant_id,)
+        )
+        return cur.rowcount
+
+
 def count_requests(participant_id: str) -> int:
     """Requests counted against the contest quota (after any reset point)."""
     with _connect() as conn:
@@ -205,6 +293,18 @@ def iter_logs() -> Iterator[dict]:
     with _connect() as conn:
         for row in conn.execute("SELECT * FROM chat_logs ORDER BY timestamp"):
             yield dict(row)
+
+
+def get_logs_for(participant_id: str) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT request_id, timestamp, messages_json, response_text, "
+            "provider_status_code, provider_error, duration_ms, "
+            "prompt_tokens, completion_tokens, total_tokens "
+            "FROM chat_logs WHERE participant_id = ? ORDER BY timestamp",
+            (participant_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def usage_rows() -> list[dict]:

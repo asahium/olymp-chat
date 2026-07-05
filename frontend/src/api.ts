@@ -8,6 +8,12 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface Chat {
+  id: string;
+  messages: ChatMessage[];
+  updatedAt: number;
+}
+
 export interface Me {
   participant_id: string;
   display_name: string;
@@ -48,6 +54,9 @@ class ApiError extends Error {
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    // Ensures ngrok returns our JSON instead of its browser-warning page for
+    // API calls; harmless over Cloudflare/localhost.
+    "ngrok-skip-browser-warning": "true",
     ...(options.headers as Record<string, string>),
   };
   const token = getToken();
@@ -70,17 +79,47 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return (await resp.json()) as T;
 }
 
-export async function login(loginCode: string): Promise<{ token: string; display_name: string }> {
-  const data = await request<{ token: string; display_name: string }>("/api/login", {
-    method: "POST",
-    body: JSON.stringify({ login_code: loginCode }),
-  });
+export async function login(
+  loginCode: string,
+): Promise<{ token: string; participant_id: string; display_name: string }> {
+  const data = await request<{ token: string; participant_id: string; display_name: string }>(
+    "/api/login",
+    {
+      method: "POST",
+      body: JSON.stringify({ login_code: loginCode }),
+    },
+  );
   setToken(data.token);
   return data;
 }
 
 export async function me(): Promise<Me> {
   return request<Me>("/api/me");
+}
+
+export async function changeCode(newCode: string): Promise<void> {
+  await request<{ ok: boolean }>("/api/change-code", {
+    method: "POST",
+    body: JSON.stringify({ new_code: newCode }),
+  });
+}
+
+// Server-side chat persistence so recent chats follow the participant across
+// devices. Returns the last few chats (server-capped), newest first.
+export async function getChats(): Promise<Chat[]> {
+  const data = await request<{
+    chats: { id: string; messages: ChatMessage[]; updated_at: number }[];
+  }>("/api/chats");
+  return data.chats.map((c) => ({ id: c.id, messages: c.messages, updatedAt: c.updated_at }));
+}
+
+export async function saveChats(chats: Chat[]): Promise<void> {
+  await request("/api/chats", {
+    method: "PUT",
+    body: JSON.stringify({
+      chats: chats.map((c) => ({ id: c.id, messages: c.messages, updated_at: c.updatedAt })),
+    }),
+  });
 }
 
 export async function chat(messages: ChatMessage[]): Promise<ChatResult> {

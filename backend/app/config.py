@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     TOP_P: float = 0.95
     REQUEST_TIMEOUT_SECONDS: float = 60.0
 
+    # Prices for the cost dashboard ($ per 1M tokens). Defaults match
+    # google/gemma-3-27b-it on OpenRouter; override in .env if the model changes.
+    PRICE_PROMPT_PER_1M: float = 0.08
+    PRICE_COMPLETION_PER_1M: float = 0.16
+
     # --- Limits ---
     MAX_INPUT_CHARS: int = 50000
     MAX_CONTEXT_MESSAGES: int = 20

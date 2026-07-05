@@ -31,6 +31,7 @@ export default function App() {
   }
 
   function handleLogout() {
+    // Chats live server-side and are pulled again on next login.
     clearToken();
     setAuthed(false);
     setDisplayName("");

@@ -36,6 +36,31 @@ def cmd_list(args: argparse.Namespace) -> None:
               f"{(p['team_id'] or ''):<12} {p['login_code']:<12} {p['display_name']}")
 
 
+def cmd_set_name(args: argparse.Namespace) -> None:
+    database.init_db()
+    # Resolve by participant_id, or fall back to login_code.
+    pid = args.participant
+    if not database.get_participant_by_id(pid):
+        p = database.get_participant_by_code(pid)
+        pid = p["participant_id"] if p else pid
+    ok = database.set_display_name(pid, args.name)
+    print(f"renamed {pid} -> {args.name}" if ok else f"unknown participant {args.participant}")
+
+
+def _resolve_pid(ref: str) -> str:
+    if database.get_participant_by_id(ref):
+        return ref
+    p = database.get_participant_by_code(ref)
+    return p["participant_id"] if p else ref
+
+
+def cmd_clear_logs(args: argparse.Namespace) -> None:
+    database.init_db()
+    pid = _resolve_pid(args.participant)
+    n = database.delete_logs_for(pid)
+    print(f"cleared {n} log row(s) for {pid}")
+
+
 def cmd_disable(args: argparse.Namespace) -> None:
     database.init_db()
     ok = database.set_active(args.participant_id, False)
@@ -88,6 +113,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("list-participants", help="list all participants")
     p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("set-name", help="set a participant's display name (by id or code)")
+    p.add_argument("participant", help="participant_id or login_code")
+    p.add_argument("name")
+    p.set_defaults(func=cmd_set_name)
+
+    p = sub.add_parser("clear-logs", help="delete all chat logs for a participant (by id or code)")
+    p.add_argument("participant", help="participant_id or login_code")
+    p.set_defaults(func=cmd_clear_logs)
 
     p = sub.add_parser("disable-participant", help="disable a participant")
     p.add_argument("participant_id")

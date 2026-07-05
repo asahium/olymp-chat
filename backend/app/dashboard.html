@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AIOI Chat — Admin Dashboard</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#181b22; --panel2:#21262f; --text:#e6e8eb;
+    --muted:#9aa3af; --accent:#4f8cff; --border:#2b303a; --green:#3fb950; --red:#ff6b6b;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  header { padding:16px 24px; border-bottom:1px solid var(--border);
+    display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; }
+  h1 { font-size:18px; margin:0; }
+  .muted { color:var(--muted); font-size:13px; }
+  .wrap { padding:20px 24px; max-width:1200px; margin:0 auto; }
+  .authbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  input[type=password], input[type=text] {
+    background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    padding:8px 10px; border-radius:8px; font-size:14px; min-width:240px; }
+  button { background:var(--accent); color:#fff; border:none; border-radius:8px;
+    padding:8px 14px; font-size:14px; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--border); }
+  button.ghost:hover { color:var(--text); }
+  button.danger { background:transparent; color:var(--red); border:1px solid var(--border); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+    gap:14px; margin:18px 0; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px; }
+  .card .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .card .value { font-size:26px; margin-top:6px; font-weight:600; }
+  .card .sub { color:var(--muted); font-size:12px; margin-top:4px; }
+  table { width:100%; border-collapse:collapse; background:var(--panel);
+    border:1px solid var(--border); border-radius:12px; overflow:hidden; font-size:14px; }
+  th, td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; cursor:pointer; user-select:none; }
+  tbody tr:hover { background:var(--panel2); }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .pill { padding:2px 8px; border-radius:20px; font-size:12px; }
+  .pill.on { color:var(--green); border:1px solid var(--green); }
+  .pill.off { color:var(--red); border:1px solid var(--red); }
+  .code { font-family:ui-monospace,Menlo,Consolas,monospace; color:var(--muted); }
+  .row-actions button { padding:4px 10px; font-size:12px; margin-left:6px; }
+  .error { color:var(--red); margin:10px 0; }
+  .hidden { display:none !important; }
+
+  /* drawer */
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; justify-content:flex-end; }
+  .drawer { width:min(720px,95vw); height:100%; background:var(--bg);
+    border-left:1px solid var(--border); overflow-y:auto; padding:20px 24px; }
+  .drawer h2 { margin:0 0 4px; font-size:18px; }
+  .turn { background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:12px 14px; margin:12px 0; }
+  .turn .meta { color:var(--muted); font-size:12px; margin-bottom:8px;
+    display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  .turn .q { white-space:pre-wrap; margin:0 0 10px; }
+  .turn .a { white-space:pre-wrap; margin:0; padding-top:10px; border-top:1px dashed var(--border); color:#d7dbe0; }
+  .turn .qlabel, .turn .alabel { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  .turn.err .a { color:var(--red); }
+  .close { float:right; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>AIOI Chat — Admin Dashboard</h1>
+    <div class="muted" id="modelline">—</div>
+  </div>
+  <div class="authbar">
+    <input type="password" id="token" placeholder="Admin token (X-Admin-Token)" />
+    <button id="loadBtn">Load</button>
+    <button class="ghost" id="refreshBtn">Refresh</button>
+    <button class="ghost" id="resetAllBtn">Reset all limits</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="error" class="error hidden"></div>
+
+  <div class="cards" id="cards"></div>
+
+  <table id="table" class="hidden">
+    <thead>
+      <tr>
+        <th data-sort="display_name">Name</th>
+        <th data-sort="login_code">Code</th>
+        <th data-sort="team_id">Team</th>
+        <th data-sort="is_active">Status</th>
+        <th data-sort="code_changed">Code</th>
+        <th class="num" data-sort="requests">Sent (all)</th>
+        <th class="num" data-sort="prompt_tokens">In tok</th>
+        <th class="num" data-sort="completion_tokens">Out tok</th>
+        <th class="num" data-sort="cost">Cost</th>
+        <th class="num" data-sort="remaining_requests">Limit (left/total)</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<div id="drawer" class="overlay hidden"></div>
+
+<script>
+const KEY = "aioi_admin_token";
+let LAST = null;           // last usage payload
+let sortKey = "cost", sortDir = -1;
+
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => (n ?? 0).toLocaleString("en-US");
+const money = (n) => "$" + (n ?? 0).toFixed(4);
+const esc = (s) => (s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+function token() { return $("token").value.trim(); }
+
+async function api(path) {
+  const resp = await fetch(path, { headers: { "X-Admin-Token": token() } });
+  if (resp.status === 401) throw new Error("Invalid admin token.");
+  if (!resp.ok) throw new Error("Request failed (" + resp.status + ")");
+  return resp.json();
+}
+
+function showError(msg) {
+  const e = $("error");
+  if (!msg) { e.classList.add("hidden"); return; }
+  e.textContent = msg; e.classList.remove("hidden");
+}
+
+async function load() {
+  showError("");
+  sessionStorage.setItem(KEY, token());
+  try {
+    const data = await api("/api/admin/usage");
+    LAST = data;
+    render();
+  } catch (err) { showError(err.message); }
+}
+
+function render() {
+  const d = LAST;
+  $("modelline").textContent =
+    d.model + "  ·  in $" + d.prices.prompt_per_1m + "/M, out $" + d.prices.completion_per_1m + "/M";
+
+  const t = d.totals;
+  $("cards").innerHTML = `
+    <div class="card"><div class="label">Total cost</div><div class="value">${money(t.cost)}</div>
+      <div class="sub">${d.per_participant.length} participants</div></div>
+    <div class="card"><div class="label">Requests</div><div class="value">${fmt(t.requests)}</div></div>
+    <div class="card"><div class="label">Input tokens</div><div class="value">${fmt(t.prompt_tokens)}</div></div>
+    <div class="card"><div class="label">Output tokens</div><div class="value">${fmt(t.completion_tokens)}</div>
+      <div class="sub">${fmt(t.total_tokens)} total</div></div>`;
+
+  const rows = [...d.per_participant].sort((a, b) => {
+    const x = a[sortKey], y = b[sortKey];
+    if (typeof x === "string") return sortDir * String(x).localeCompare(String(y));
+    return sortDir * ((x ?? 0) - (y ?? 0));
+  });
+
+  $("tbody").innerHTML = rows.map(r => `
+    <tr>
+      <td>${esc(r.display_name)}</td>
+      <td class="code">${esc(r.login_code)}</td>
+      <td>${esc(r.team_id || "")}</td>
+      <td>${r.is_active ? '<span class="pill on">active</span>' : '<span class="pill off">disabled</span>'}</td>
+      <td>${r.code_changed ? '<span class="pill on">custom</span>' : '<span class="pill off">default</span>'}</td>
+      <td class="num">${fmt(r.requests)}</td>
+      <td class="num">${fmt(r.prompt_tokens)}</td>
+      <td class="num">${fmt(r.completion_tokens)}</td>
+      <td class="num">${money(r.cost)}</td>
+      <td class="num" title="${fmt(r.quota_used)} used in current window">
+        <strong>${fmt(r.remaining_requests)}</strong> <span class="muted">/ ${fmt(r.quota_limit)}</span>
+      </td>
+      <td class="row-actions">
+        <button class="ghost" onclick="viewChats('${r.participant_id}')">Chats</button>
+        <button class="ghost" onclick="resetQuota('${r.participant_id}','${esc(r.display_name)}')">Reset</button>
+        ${r.is_active
+          ? `<button class="danger" onclick="setActive('${r.participant_id}', false)">Disable</button>`
+          : `<button class="ghost" onclick="setActive('${r.participant_id}', true)">Enable</button>`}
+      </td>
+    </tr>`).join("");
+
+  $("table").classList.remove("hidden");
+}
+
+async function setActive(pid, active) {
+  try {
+    await fetch(`/api/admin/participants/${pid}/${active ? "enable" : "disable"}`,
+      { method: "POST", headers: { "X-Admin-Token": token() } });
+    load();
+  } catch (err) { showError(err.message); }
+}
+
+async function resetQuota(pid, name) {
+  if (!confirm(`Reset the request limit for ${name}? Their limit goes back to full. Past usage stats (requests, tokens, cost) are kept.`)) return;
+  try {
+    const resp = await fetch(`/api/admin/participants/${pid}/reset-quota`,
+      { method: "POST", headers: { "X-Admin-Token": token() } });
+    if (!resp.ok) throw new Error("Reset failed (" + resp.status + ")");
+    load();
+  } catch (err) { showError(err.message); }
+}
+
+async function resetAllQuotas() {
+  if (!confirm("Reset the request limit for ALL participants? Usage stats are kept.")) return;
+  try {
+    const resp = await fetch("/api/admin/reset-quotas",
+      { method: "POST", headers: { "X-Admin-Token": token() } });
+    if (!resp.ok) throw new Error("Reset failed (" + resp.status + ")");
+    load();
+  } catch (err) { showError(err.message); }
+}
+
+function lastUserMessage(messagesJson) {
+  try {
+    const msgs = JSON.parse(messagesJson);
+    for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === "user") return msgs[i].content;
+  } catch {}
+  return "(no message)";
+}
+
+async function viewChats(pid) {
+  try {
+    const data = await api(`/api/admin/participants/${pid}/logs`);
+    const turns = data.logs.map(l => {
+      const err = l.provider_error;
+      const when = (l.timestamp || "").replace("T", " ").slice(0, 19);
+      const toks = (l.total_tokens != null)
+        ? `${l.prompt_tokens || 0} in / ${l.completion_tokens || 0} out` : "—";
+      return `
+        <div class="turn ${err ? "err" : ""}">
+          <div class="meta"><span>${when}</span><span>${toks} · ${l.duration_ms ?? "?"} ms</span></div>
+          <div class="qlabel">Question</div>
+          <p class="q">${esc(lastUserMessage(l.messages_json))}</p>
+          <div class="alabel">${err ? "Error" : "Answer"}</div>
+          <p class="a">${esc(err || l.response_text || "(empty)")}</p>
+        </div>`;
+    }).join("");
+
+    $("drawer").innerHTML = `
+      <div class="drawer">
+        <button class="ghost close" onclick="closeDrawer()">Close</button>
+        <h2>${esc(data.display_name)}</h2>
+        <div class="muted">${data.logs.length} request(s)</div>
+        ${turns || '<p class="muted">No requests yet.</p>'}
+      </div>`;
+    $("drawer").classList.remove("hidden");
+    $("drawer").onclick = (e) => { if (e.target.id === "drawer") closeDrawer(); };
+  } catch (err) { showError(err.message); }
+}
+
+function closeDrawer() { $("drawer").classList.add("hidden"); $("drawer").innerHTML = ""; }
+
+document.querySelectorAll("th[data-sort]").forEach(th => {
+  th.onclick = () => {
+    const k = th.getAttribute("data-sort");
+    if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = -1; }
+    if (LAST) render();
+  };
+});
+
+$("loadBtn").onclick = load;
+$("refreshBtn").onclick = load;
+$("resetAllBtn").onclick = resetAllQuotas;
+$("token").addEventListener("keydown", e => { if (e.key === "Enter") load(); });
+
+// Prefill token and auto-load if present.
+const saved = sessionStorage.getItem(KEY);
+if (saved) { $("token").value = saved; load(); }
+</script>
+</body>
+</html>

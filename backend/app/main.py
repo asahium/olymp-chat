@@ -11,19 +11,21 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import auth, database, logging_service, openrouter, provisioning
 from .config import get_settings
 from .constants import SYSTEM_PROMPT  # noqa: F401 (documents where prompt lives)
 from .models import (
+    ChangeCodeRequest,
     ChatLimits,
     ChatRequest,
     ChatResponse,
     LoginRequest,
     LoginResponse,
     MeResponse,
+    SaveChatsRequest,
 )
 from .rate_limit import rate_limiter
 
@@ -85,6 +87,47 @@ async def api_me(participant: dict = Depends(auth.get_current_participant)):
         team_id=participant["team_id"],
         remaining_requests=rate_limiter.remaining_quota(participant["participant_id"]),
     )
+
+
+@app.post("/api/change-code")
+async def api_change_code(
+    body: ChangeCodeRequest, participant: dict = Depends(auth.get_current_participant)
+):
+    new_code = body.new_code.strip()
+    if not (4 <= len(new_code) <= 40) or any(c.isspace() for c in new_code):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Code must be 4–40 characters with no spaces.",
+        )
+    existing = database.get_participant_by_code(new_code)
+    if existing and existing["participant_id"] != participant["participant_id"]:
+        raise HTTPException(status.HTTP_409_CONFLICT, "That code is already taken.")
+    database.set_login_code(participant["participant_id"], new_code)
+    # Current JWT stays valid (it is bound to participant_id, not the code).
+    return {"ok": True}
+
+
+@app.get("/api/chats")
+async def api_get_chats(participant: dict = Depends(auth.get_current_participant)):
+    return {"chats": database.get_saved_chats(participant["participant_id"])}
+
+
+@app.put("/api/chats")
+async def api_put_chats(
+    body: SaveChatsRequest, participant: dict = Depends(auth.get_current_participant)
+):
+    # Cap messages per chat as a safety bound; save_saved_chats keeps the two
+    # most recent by updated_at.
+    chats = [
+        {
+            "id": c.id,
+            "messages": [{"role": m.role, "content": m.content} for m in c.messages[-200:]],
+            "updated_at": c.updated_at,
+        }
+        for c in body.chats
+    ]
+    database.save_saved_chats(participant["participant_id"], chats)
+    return {"chats": database.get_saved_chats(participant["participant_id"])}
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -203,6 +246,42 @@ async def admin_disable_participant(participant_id: str):
     if not database.set_active(participant_id, False):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown participant.")
     return {"participant_id": participant_id, "is_active": False}
+
+
+@app.post("/api/admin/participants/{participant_id}/enable", dependencies=[Depends(require_admin)])
+async def admin_enable_participant(participant_id: str):
+    if not database.set_active(participant_id, True):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown participant.")
+    return {"participant_id": participant_id, "is_active": True}
+
+
+@app.post("/api/admin/participants/{participant_id}/reset-quota", dependencies=[Depends(require_admin)])
+async def admin_reset_quota(participant_id: str):
+    if not database.reset_quota(participant_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown participant.")
+    return {"participant_id": participant_id, "reset": True}
+
+
+@app.post("/api/admin/reset-quotas", dependencies=[Depends(require_admin)])
+async def admin_reset_all_quotas():
+    return {"reset_count": database.reset_all_quotas()}
+
+
+@app.get("/api/admin/participants/{participant_id}/logs", dependencies=[Depends(require_admin)])
+async def admin_participant_logs(participant_id: str):
+    p = database.get_participant_by_id(participant_id)
+    if not p:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown participant.")
+    return {
+        "participant_id": participant_id,
+        "display_name": p["display_name"],
+        "logs": database.get_logs_for(participant_id),
+    }
+
+
+@app.get("/admin", include_in_schema=False)
+async def admin_dashboard():
+    return FileResponse(Path(__file__).resolve().parent / "dashboard.html")
 
 
 # --- static frontend (mounted last so /api/* wins) ---------------------------
