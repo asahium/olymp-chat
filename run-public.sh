@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
-# One-command launcher for handover: starts the backend AND a Cloudflare quick
-# tunnel, then prints the current public URL. Ctrl+C stops both.
+# One-command launcher: starts the backend AND both public tunnels
+# (Cloudflare + ngrok), then prints every address. Ctrl+C stops everything.
 #
-# Note: on a free quick tunnel the URL changes each run. For a permanent address
-# you need a domain on Cloudflare + a named tunnel (see README).
+# Note: free quick tunnels get a NEW random URL each run. For a permanent ngrok
+# address, reserve a static domain (dashboard.ngrok.com/domains) and set
+# NGROK_DOMAIN below (or export it before running).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${PORT:-8000}"
 TUNNEL_LOG="/tmp/aioi-tunnel.log"
-
-command -v cloudflared >/dev/null 2>&1 || {
-  echo "cloudflared not found. Install it: brew install cloudflared"; exit 1;
-}
+NGROK_LOG="/tmp/aioi-ngrok.log"
+NGROK_DOMAIN="${NGROK_DOMAIN:-}"   # optional: your reserved *.ngrok-free.app domain
 
 cleanup() {
   echo ""; echo "Stopping…"
-  [ -n "${TUNNEL_PID:-}" ] && kill "$TUNNEL_PID" 2>/dev/null || true
-  [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
+  for pid in "${NG_PID:-}" "${CF_PID:-}" "${SERVER_PID:-}"; do
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+  done
 }
 trap cleanup EXIT INT TERM
+
+have_cf=1; command -v cloudflared >/dev/null 2>&1 || have_cf=0
+have_ng=1; command -v ngrok       >/dev/null 2>&1 || have_ng=0
 
 # 1) Backend (run.sh binds 0.0.0.0 and serves the built SPA)
 echo "Starting backend…"
@@ -33,29 +36,58 @@ for _ in $(seq 1 30); do
 done
 
 # 3) Cloudflare quick tunnel (http2 avoids QUIC/UDP being blocked on some nets)
-echo "Starting Cloudflare tunnel…"
-: > "$TUNNEL_LOG"
-cloudflared tunnel --url "http://localhost:$PORT" --protocol http2 > "$TUNNEL_LOG" 2>&1 &
-TUNNEL_PID=$!
+CF_URL=""
+if [ "$have_cf" -eq 1 ]; then
+  echo "Starting Cloudflare tunnel…"
+  : > "$TUNNEL_LOG"
+  cloudflared tunnel --url "http://localhost:$PORT" --protocol http2 > "$TUNNEL_LOG" 2>&1 &
+  CF_PID=$!
+  for _ in $(seq 1 30); do
+    CF_URL="$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" | head -1 || true)"
+    [ -n "$CF_URL" ] && break
+    sleep 1
+  done
+else
+  echo "cloudflared not installed — skipping (brew install cloudflared)"
+fi
 
-# 4) Extract and show the public URL
-URL=""
-for _ in $(seq 1 30); do
-  URL="$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" | head -1 || true)"
-  [ -n "$URL" ] && break
-  sleep 1
-done
+# 4) ngrok tunnel (reads authtoken from ngrok config; static domain if set)
+NG_URL=""
+if [ "$have_ng" -eq 1 ]; then
+  echo "Starting ngrok tunnel…"
+  : > "$NGROK_LOG"
+  if [ -n "$NGROK_DOMAIN" ]; then
+    ngrok http "$PORT" --url="$NGROK_DOMAIN" --log stdout > "$NGROK_LOG" 2>&1 &
+  else
+    ngrok http "$PORT" --log stdout > "$NGROK_LOG" 2>&1 &
+  fi
+  NG_PID=$!
+  for _ in $(seq 1 20); do
+    NG_URL="$(curl -s http://localhost:4040/api/tunnels 2>/dev/null \
+      | python3 -c 'import sys,json
+try:
+    d=json.load(sys.stdin); t=[x["public_url"] for x in d.get("tunnels",[]) if x["public_url"].startswith("https")]
+    print(t[0] if t else "")
+except Exception: print("")' 2>/dev/null || true)"
+    [ -n "$NG_URL" ] && break
+    sleep 1
+  done
+  [ -z "$NG_URL" ] && echo "  (ngrok didn't report a URL — is the authtoken set? 'ngrok config add-authtoken …')"
+else
+  echo "ngrok not installed — skipping (brew install ngrok)"
+fi
 
 LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || echo '<lan-ip>')"
 echo ""
 echo "=================================================================="
 echo "  AIOI Contest Chat is LIVE"
-echo "  Public (share this):  ${URL:-<starting… check $TUNNEL_LOG>}"
+echo "  Cloudflare (share):   ${CF_URL:-<none>}"
+echo "  ngrok (backup):       ${NG_URL:-<none>}"
 echo "  Same WiFi:            http://$LAN_IP:$PORT"
 echo "  Admin dashboard:      http://localhost:$PORT/admin"
 echo "=================================================================="
-echo "  Press Ctrl+C to stop both server and tunnel."
+echo "  Press Ctrl+C to stop the server and both tunnels."
 echo ""
 
-# Keep running until either process exits
-wait -n "$SERVER_PID" "$TUNNEL_PID" 2>/dev/null || wait
+# Keep running until any managed process exits
+wait -n "$SERVER_PID" ${CF_PID:+"$CF_PID"} ${NG_PID:+"$NG_PID"} 2>/dev/null || wait
