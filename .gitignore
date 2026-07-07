@@ -18,6 +18,3 @@ frontend/dist/
 
 # TS build info
 frontend/tsconfig.tsbuildinfo
-
-# Participant codes (names + login codes) — keep local only
-participant_codes.csv

@@ -7,6 +7,26 @@ per-participant rate limits and quotas, and full server-side logging.
 Students install nothing — they open a URL in any modern browser (Chrome, Edge, Firefox,
 Safari) on Windows/macOS/Linux and log in with a code the organizers hand out.
 
+## Features
+
+- Login by organizer-issued code; participants can **set their own private code** ("Change code").
+- Chat with **Gemma 3 27B**, answers capped at **1000 tokens** (all generation settings fixed server-side).
+- **Markdown rendering** with copy-able code blocks (works over plain HTTP too).
+- **Edit any of your messages and re-run** the model from that point.
+- **Recent 2 chats saved server-side** per participant — visible from any device after login.
+- **Admin dashboard** at `/admin`: per-participant cost/tokens/limits, chat histories,
+  who still uses the default code, quota reset (keeps stats), enable/disable.
+- Per-participant rate limits (RPM/RPH) and a total contest quota.
+
+## Quick start (TL;DR)
+
+```bash
+bash setup.sh     # one-time: prerequisites, .env (auto JWT + admin password), deps, build
+./run.sh          # serve on this machine + LAN  (http://localhost:8000)
+# or
+./run-public.sh   # same, plus a public Cloudflare tunnel URL to share
+```
+
 ## Architecture
 
 ```
@@ -39,6 +59,12 @@ olymp-chat/
 
 ## 1. Create your `.env`
 
+**Easiest:** run `bash setup.sh` — it creates `.env`, auto-generates `JWT_SECRET` and
+`ADMIN_TOKEN`, prompts for your OpenRouter key, installs dependencies, builds the frontend,
+and can generate participant codes. Then just `./run.sh`.
+
+**Manual:**
+
 ```bash
 cp .env.example .env
 ```
@@ -47,7 +73,7 @@ Fill in:
 
 - `OPENROUTER_API_KEY` — your single OpenRouter key (server-side only).
 - `JWT_SECRET` — a long random string: `python -c "import secrets; print(secrets.token_urlsafe(48))"`
-- `ADMIN_TOKEN` — a random string used for the `/api/admin/*` endpoints.
+- `ADMIN_TOKEN` — a random string used for the `/api/admin/*` endpoints and the `/admin` dashboard.
 
 Everything else has safe defaults (Gemma 3, 1000 tokens, RPM 5, RPH 100, quota 300).
 
@@ -110,13 +136,24 @@ auto-detects `frontend/dist`.
 
 ## Admin operations
 
+### Dashboard (visual)
+
+Open **`http://localhost:8000/admin`**, paste your `ADMIN_TOKEN`, and you get: per-participant
+cost/tokens/requests, current limit (left/total), who still uses the default code, each
+participant's chat history, plus buttons to reset a limit (keeps usage stats), reset all
+limits, and enable/disable. Prefer opening it via `localhost` rather than a public tunnel.
+
+### CLI
+
 All admin CLI commands (run locally in `backend/` or via `docker compose exec backend`):
 
 ```bash
 python manage.py generate-participants --count 50 --team-prefix team
 python manage.py list-participants
+python manage.py set-name p017 "Jane Doe"      # set display name (by id or code)
 python manage.py disable-participant p017      # revoke access
-python manage.py reset-quota p017              # restore contest quota
+python manage.py reset-quota p017              # restore contest quota (keeps stats)
+python manage.py clear-logs p017               # delete a participant's chat logs
 python manage.py export-logs --output logs.jsonl   # or logs.csv
 python manage.py usage-summary                 # per-participant + total tokens
 python manage.py clear-sessions                # invalidate all issued tokens
@@ -158,6 +195,9 @@ python manage.py reset-quota p017           # resets the per-contest request cou
 | POST | `/api/login`  | — | `{login_code}` → `{token, participant_id, display_name}` |
 | POST | `/api/chat`   | Bearer | `{messages:[{role,content}]}` → `{message, usage, limits}` |
 | GET  | `/api/me`     | Bearer | Participant info + `remaining_requests` |
+| POST | `/api/change-code` | Bearer | `{new_code}` → set your own private login code |
+| GET/PUT | `/api/chats` | Bearer | Fetch/save the last 2 chats (server-side, cross-device) |
+| GET  | `/admin`      | — (token in page) | Admin dashboard UI |
 
 ---
 
@@ -221,7 +261,8 @@ key non-exposure.
 ## Security notes
 
 - No API keys in the frontend; no client-trusted limits; no arbitrary passthrough to OpenRouter.
-- Model output is rendered as **plain text** (no HTML/Markdown-HTML) to avoid XSS.
+- Model output is rendered as **sanitized Markdown** (react-markdown, no raw HTML) to avoid XSS;
+  user messages are shown as plain text.
 - Request body size is capped; oversized input returns 413.
 - Set `CORS_ORIGINS` and terminate TLS (HTTPS) at your reverse proxy for a public deployment.
 - No file uploads, web browsing, tools, plugins, or multi-model selection.

@@ -87,6 +87,24 @@ export default function ChatPage({ displayName, onLogout }: Props) {
     }
   }
 
+  // Edit an earlier user message: drop everything from that point and re-run.
+  async function editAndResend(index: number, newText: string) {
+    if (loading) return;
+    setError("");
+    const next: ChatMessage[] = [...messages.slice(0, index), { role: "user", content: newText }];
+    updateActive(next);
+    setLoading(true);
+    try {
+      const result = await chat(next);
+      updateActive([...next, { role: "assistant", content: result.message.content }]);
+    } catch (err) {
+      updateActive(messages); // restore the original conversation on failure
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function newChat() {
     setError("");
     if (active.messages.length === 0) return; // don't stack empty chats
@@ -154,7 +172,7 @@ export default function ChatPage({ displayName, onLogout }: Props) {
         </div>
       )}
 
-      <MessageList messages={messages} loading={loading} />
+      <MessageList messages={messages} loading={loading} onEditUser={editAndResend} />
 
       {error && <div className="error chat-error">{error}</div>}
 
