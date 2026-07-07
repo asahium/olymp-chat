@@ -1,7 +1,8 @@
-# Secrets & data
+# Secrets (API key etc.) — never commit
 .env
-data/
-*.db
+
+# Note: data/app.db IS committed for seamless handover (participants, current
+# codes, chat history). Repo is private. Remove it from tracking if that changes.
 
 # Python
 backend/.venv/
